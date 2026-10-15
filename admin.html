@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="gu">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#E65100">
+  <title>ટોકન / टोकन</title>
+  <link rel="stylesheet" href="common.css">
+  <script src="common.js"></script>
+</head>
+<body>
+  <div id="hdr" class="hdr"></div>
+  <main class="page">
+    <div class="seg" id="tabs"></div>
+    <div id="body"></div>
+  </main>
+  <nav id="nav" class="nav"></nav>
+<script>
+(() => {
+  'use strict';
+  const A = App, { $, el, t, toast, call } = A;
+  const sess = A.requireLogin(['Admin']);
+  if (!sess) return;
+  let tab = 'menu', menu = [], customers = [], settings = null;
+  const SETTING_KEYS = [['shop_name', 'text'], ['shop_whatsapp', 'tel'], ['app_url', 'text'], ['pending_expiry_min', 'number'], ['max_pending_per_customer', 'number'], ['poll_seconds', 'number'],
+    ['wa_template_token', 'area'], ['wa_template_pending', 'area'], ['wa_template_pin', 'area']];
+
+  function drawTabs() { $('tabs').replaceChildren(...['menu', 'cust', 'settings', 'archive'].map((k) => el('button', { type: 'button', class: tab === k ? 'active' : '', text: t('a_' + (k === 'cust' ? 'cust' : k)), onclick: () => { tab = k; draw(); } }))); }
+  function field(label, input) { return [el('label', { class: 'lbl', text: label }), input]; }
+
+  /* ---------------- menu ---------------- */
+  function openItem(m) {
+    const name = el('input', { class: 'field', id: 'mName', maxlength: '60' }), hi = el('input', { class: 'field', id: 'mHi', maxlength: '60' });
+    const price = el('input', { class: 'field', id: 'mPrice', type: 'text', inputmode: 'decimal' }), sort = el('input', { class: 'field', id: 'mSort', type: 'number' });
+    const status = el('select', { class: 'field', id: 'mStatus' }, ...['Active', 'OutOfStock', 'Inactive'].map((s) => el('option', { value: s, text: t('ms_' + s) })));
+    const save = el('button', { class: 'btn btn-primary btn-block', type: 'submit', text: t('save') });
+    if (m) { name.value = m.name; hi.value = m.name_hi; price.value = String(m.price); sort.value = String(m.sort); status.value = m.status; } else { sort.value = String((menu.length + 1) * 10); }
+    let close;
+    const form = el('form', { novalidate: true }, ...field(t('m_name'), name), ...field(t('m_name_hi'), hi), el('div', { class: 'two' }, el('div', {}, ...field(t('m_price'), price)), el('div', {}, ...field(t('m_sort'), sort))), ...field(t('m_status'), status), save);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!name.value.trim()) { toast(t('enter_login'), 'error'); return; }
+      A.setBusy(save, true);
+      try { const d = await call('save_menu_item', { item_id: m ? m.id : '', name: name.value.trim(), name_hi: hi.value.trim(), price: Number(price.value.replace(/,/g, '')), status: status.value, sort: Number(sort.value) || 0 }); menu = d.menu; close(); toast(t('saved')); draw(); }
+      catch (err) { toast(err.message, 'error'); A.setBusy(save, false); }
+    });
+    close = A.openSheet(m ? A.itemName(m) : t('a_menu'), form); name.focus();
+  }
+  function drawMenu(box) {
+    box.replaceChildren(el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: t('a_add'), onclick: () => openItem(null) }),
+      ...menu.map((m) => el('button', { class: 'tok', type: 'button', style: 'width:100%;text-align:left;cursor:pointer;margin-top:.5rem', onclick: () => openItem(m) },
+        el('div', { class: 'tok-top' }, el('b', { text: A.itemName(m) }), A.chip(m.status === 'Active' ? 'READY' : 'REJECTED', t('ms_' + m.status))), el('div', { class: 'tok-sub', text: '₹ ' + A.money(m.price) + (m.name_hi ? ' · ' + (A.getLang() === 'hi' ? m.name : m.name_hi) : '') }))));
+  }
+
+  /* ---------------- customers ---------------- */
+  function openCustomer(c) {
+    const name = el('input', { class: 'field', id: 'cName', maxlength: '60', value: c.name }), mob = el('input', { class: 'field', id: 'cMob', type: 'tel', value: c.mobile, maxlength: '14' });
+    const status = el('select', { class: 'field', id: 'cStatus' }, el('option', { value: 'Active', text: t('c_active') }), el('option', { value: 'Inactive', text: t('c_inactive') })); status.value = c.status;
+    const save = el('button', { class: 'btn btn-primary btn-block', type: 'submit', text: t('save') });
+    const pinBox = el('div');
+    let close;
+    const form = el('form', { novalidate: true }, ...field(t('name'), name), ...field(t('mobile'), mob), ...field(t('m_status'), status), save,
+      el('button', { class: 'btn btn-ghost btn-block', type: 'button', text: '🔑 ' + t('reset_pin'), onclick: async () => {
+        try { const r = await call('reset_customer_pin', { customer_id: c.id }); pinBox.replaceChildren(el('div', { class: 'hint', text: t('new_pin_for') + ': ' + r.pin + ' — ' + t('pin_hint') }),
+          el('button', { class: 'btn btn-wa btn-block', type: 'button', text: '💬 ' + t('whatsapp'), onclick: () => A.openWa(c.mobile, A.waText(settings.wa_template_pin, settings, { items: [], total: 0, service: 'PARCEL' }, { pin: r.pin, link: settings.app_url })) })); }
+        catch (err) { toast(err.message, 'error'); } } }), pinBox);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault(); A.setBusy(save, true);
+      try { const r = await call('save_customer', { id: c.id, name: name.value.trim(), mobile: A.normMobile(mob.value), status: status.value }); Object.assign(c, r.customer); close(); toast(t('saved')); draw(); }
+      catch (err) { toast(err.message, 'error'); A.setBusy(save, false); }
+    });
+    close = A.openSheet(t('cu_edit'), form);
+  }
+  function drawCust(box) {
+    const q = el('input', { class: 'field', placeholder: t('search_cust') });
+    const list = el('div');
+    const paint = () => { const s = q.value.trim().toLowerCase(); const rows = customers.filter((c) => !s || c.name.toLowerCase().indexOf(s) >= 0 || c.mobile.indexOf(s) >= 0);
+      list.replaceChildren(...(rows.length ? rows.map((c) => el('button', { class: 'tok', type: 'button', style: 'width:100%;text-align:left;cursor:pointer;margin-top:.5rem', onclick: () => openCustomer(c) },
+        el('div', { class: 'tok-top' }, el('b', { text: c.name }), A.chip(c.status === 'Active' ? 'READY' : 'REJECTED', t(c.status === 'Active' ? 'c_active' : 'c_inactive'))), el('div', { class: 'tok-sub', text: c.mobile }))) : [el('div', { class: 'empty', text: t('cu_none') })])); };
+    q.addEventListener('input', paint); paint();
+    box.replaceChildren(q, list);
+  }
+
+  /* ---------------- settings ---------------- */
+  function drawSettings(box) {
+    const inputs = {};
+    const rows = SETTING_KEYS.map(([k, kind]) => {
+      const inp = kind === 'area' ? el('textarea', { class: 'field', rows: '4', id: 's_' + k }) : el('input', { class: 'field', id: 's_' + k, type: kind === 'number' ? 'number' : (kind === 'tel' ? 'tel' : 'text') });
+      inp.value = settings[k] == null ? '' : String(settings[k]); inputs[k] = inp;
+      return [el('label', { class: 'lbl', for: 's_' + k, text: t('s_' + k) }), inp];
+    });
+    const save = el('button', { class: 'btn btn-primary btn-block', type: 'submit', text: t('save') });
+    const form = el('form', { novalidate: true }, ...rows.flat(), el('div', { class: 'hint', text: t('s_vars') }), save);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault(); A.setBusy(save, true);
+      try { const values = {}; SETTING_KEYS.forEach(([k]) => { values[k] = inputs[k].value; }); const r = await call('save_settings', { values }); settings = r.settings; toast(t('saved')); }
+      catch (err) { toast(err.message, 'error'); } finally { A.setBusy(save, false); }
+    });
+    box.replaceChildren(form);
+  }
+
+  /* ---------------- archive ---------------- */
+  function drawArchive(box) {
+    const d = new Date(); d.setMonth(d.getMonth() - 1);
+    const month = el('input', { class: 'field', type: 'month', id: 'arMonth', value: d.getFullYear() + '-' + A.pad(d.getMonth() + 1) });
+    const info = el('div'), go = el('button', { class: 'btn btn-primary btn-block', type: 'button', text: t('ar_go'), hidden: true });
+    let pv = null;
+    async function preview() {
+      info.replaceChildren(); go.hidden = true;
+      try {
+        pv = await call('archive_preview', { month: month.value });
+        info.replaceChildren(el('div', { class: 'hint', text: pv.to_archive ? t('ar_info', { a: pv.to_archive, b: pv.stays_open, tab: pv.archive_tab }) : t('ar_none') }));
+        go.hidden = !pv.to_archive;
+      } catch (err) { toast(err.message, 'error'); }
+    }
+    go.addEventListener('click', async () => {
+      if (!pv || !confirm(t('ar_confirm', { a: pv.to_archive }))) return;
+      A.setBusy(go, true);
+      try { const r = await call('archive_month', { month: month.value }); toast(t('ar_done', { a: r.moved })); await preview(); }
+      catch (err) { toast(err.message, 'error'); } finally { A.setBusy(go, false); }
+    });
+    month.addEventListener('change', preview);
+    box.replaceChildren(...field(t('ar_month'), month), el('button', { class: 'btn btn-ghost btn-block', type: 'button', text: t('ar_preview'), onclick: preview }), info, go);
+  }
+
+  function draw() {
+    drawTabs();
+    const box = el('div'); $('body').replaceChildren(box);
+    if (tab === 'menu') drawMenu(box); else if (tab === 'cust') drawCust(box); else if (tab === 'settings') drawSettings(box); else drawArchive(box);
+  }
+  async function init() {
+    A.mountHeader('n_admin', async () => { await loadAll(); draw(); }); A.mountNav('admin');
+    $('body').replaceChildren(el('div', { class: 'loading', text: t('loading') }));
+    try { await loadAll(); draw(); } catch (err) { $('body').replaceChildren(el('div', { class: 'empty', text: err.message })); }
+  }
+  async function loadAll() { const [b, m, c] = await Promise.all([call('bootstrap'), call('admin_menu'), call('list_customers')]); settings = b.settings; menu = m.menu; customers = c.customers; }
+  init();
+})();
+</script>
+</body>
+</html>

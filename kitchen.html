@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="gu">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#E65100">
+  <title>ટોકન / टोकन</title>
+  <link rel="stylesheet" href="common.css">
+  <script src="common.js"></script>
+</head>
+<body>
+  <div id="hdr" class="hdr"></div>
+  <main class="page">
+    <div id="sum"></div>
+    <div id="list"></div>
+  </main>
+  <nav id="nav" class="nav"></nav>
+<script>
+(() => {
+  'use strict';
+  const A = App, { $, el, t, toast, call } = A;
+  const sess = A.requireLogin(['Karigar', 'Admin', 'Cashier']);
+  if (!sess) return;
+  let ver = null, tokens = [], pollSec = 6;
+
+  async function act(action, id) { try { await call(action, { token_id: id }); await load(true); } catch (err) { toast(err.message, 'error'); } }
+  function card(k) {
+    const parcel = k.service === 'PARCEL';
+    return el('div', { class: 'k-card ' + (parcel ? 'parcel' : 'dine') + (k.status === 'READY' ? ' ready' : '') },
+      el('div', { class: 'tok-top' }, el('div', { class: 'k-no', text: k.token_no }), el('div', { class: 'k-svc', text: parcel ? t('parcel_big') : t('dine_big') })),
+      el('div', { class: 'k-who', text: [k.customer_name, k.customer_mobile].filter(Boolean).join(' · ') }),
+      el('div', { class: 'k-items' }, ...k.items.map((x) => el('div', { text: A.itemName(x) + ' × ' + x.qty }))),
+      k.note ? el('div', { class: 'k-who', text: '📝 ' + k.note }) : null,
+      el('div', { class: 'btns' }, k.status === 'CONFIRMED' ? el('button', { class: 'btn', type: 'button', text: t('ready_btn'), onclick: () => act('set_ready', k.id) }) : A.statusChip('READY'),
+        el('button', { class: 'btn', type: 'button', text: '✓ ' + t('close_btn'), onclick: () => act('close_token', k.id) })));
+  }
+  function render() {
+    const open = tokens.filter((k) => k.status === 'CONFIRMED' || k.status === 'READY').sort((a, b) => ((a.created_at || '') < (b.created_at || '') ? -1 : 1));
+    const sum = A.kitchenSummary(open);
+    $('sum').replaceChildren(...(sum.length ? [el('div', { class: 'k-sum' }, t('k_sum') + ': ' + sum.map((x) => x.name + ' ×' + x.qty).join(', '))] : []));
+    $('list').replaceChildren(...(open.length ? open.map(card) : [el('div', { class: 'empty', text: t('k_none') })]));
+  }
+  async function load(force) {
+    const d = await call('staff_board', force || ver === null ? { force: true } : { version: ver });
+    if (d.unchanged) return;
+    ver = d.version; tokens = d.tokens; render();
+  }
+  async function init() {
+    A.mountHeader('k_title', () => load(true)); A.mountNav('kitchen');
+    $('list').replaceChildren(el('div', { class: 'loading', text: t('loading') }));
+    try { const b = await call('bootstrap'); pollSec = b.settings.poll_seconds; A.startPolling(() => load(false), () => pollSec); }
+    catch (err) { $('list').replaceChildren(el('div', { class: 'empty', text: err.message })); }
+  }
+  init();
+})();
+</script>
+</body>
+</html>

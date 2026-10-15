@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="gu">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#E65100">
+  <title>ટોકન / टोकन</title>
+  <link rel="stylesheet" href="common.css">
+  <script src="common.js"></script>
+</head>
+<body>
+  <div id="hdr" class="hdr"></div>
+  <main class="page wide">
+    <div class="seg" id="mode"></div>
+    <div id="picker"></div>
+    <div id="out"></div>
+  </main>
+  <nav id="nav" class="nav"></nav>
+<script>
+(() => {
+  'use strict';
+  const A = App, { $, el, t, toast, call } = A;
+  const sess = A.requireLogin(['Admin', 'Viewer']);
+  if (!sess) return;
+  const now = new Date();
+  let mode = 'today', ym = { y: now.getFullYear(), m: now.getMonth() }, custom = { from: A.monthBounds(ym.y, ym.m).from, to: A.todayKey() }, req = 0;
+
+  function range() {
+    if (mode === 'today') return { from: A.todayKey(), to: A.todayKey() };
+    if (mode === 'month') return A.monthBounds(ym.y, ym.m);
+    return custom;
+  }
+  function drawPicker() {
+    $('mode').replaceChildren(...['today', 'month', 'custom'].map((m) => el('button', { type: 'button', class: mode === m ? 'active' : '', text: t('r_' + m), onclick: () => { mode = m; drawPicker(); load(); } })));
+    const box = $('picker'); box.replaceChildren();
+    if (mode === 'month') {
+      box.append(el('div', { class: 'monthbar' }, el('button', { class: 'mb-btn', type: 'button', text: '‹', onclick: () => { ym = A.shiftMonth(ym.y, ym.m, -1); drawPicker(); load(); } }),
+        el('div', { class: 'month-pick', text: new Date(ym.y, ym.m, 1).toLocaleDateString(A.getLang() === 'hi' ? 'hi-IN' : 'gu-IN', { month: 'long', year: 'numeric' }) }),
+        el('button', { class: 'mb-btn', type: 'button', text: '›', onclick: () => { ym = A.shiftMonth(ym.y, ym.m, 1); drawPicker(); load(); } })));
+    } else if (mode === 'custom') {
+      const f = el('input', { type: 'date', class: 'field', value: custom.from }), to = el('input', { type: 'date', class: 'field', value: custom.to });
+      const apply = () => { if (f.value && to.value && f.value <= to.value) { custom = { from: f.value, to: to.value }; load(); } };
+      f.addEventListener('change', apply); to.addEventListener('change', apply);
+      box.append(el('div', { class: 'two' }, el('div', {}, el('label', { class: 'lbl', text: t('r_from') }), f), el('div', {}, el('label', { class: 'lbl', text: t('r_to') }), to)));
+    }
+  }
+  const stat = (label, value) => el('div', { class: 'stat' }, el('small', { text: label }), el('b', { text: value }));
+  function render(r) {
+    const tt = r.totals;
+    const maxAmt = Math.max(1, ...r.by_day.map((d) => d.amount));
+    $('out').replaceChildren(...[
+      el('div', { class: 'cards' }, stat(t('r_sales'), '₹ ' + A.money(tt.amount)), stat(t('r_orders'), String(tt.count)), stat(t('r_cash'), '₹ ' + A.money(tt.cash)), stat(t('r_upi'), '₹ ' + A.money(tt.upi)),
+        stat(t('r_parcel'), String(tt.parcel)), stat(t('r_dine'), String(tt.dine_in)), stat(t('r_cancelled'), tt.cancelled + ' / ' + tt.rejected + ' / ' + tt.expired)),
+      ...(tt.count ? [
+        el('div', { class: 'sec', text: t('r_byday') }), r.by_day.length > 1 ? el('div', { class: 'card' }, el('div', { class: 'bars', style: 'padding-bottom:1.2rem' }, ...r.by_day.map((d) => el('div', { class: 'bar', title: d.date + ' ₹' + A.money(d.amount), style: 'height:' + Math.max(2, Math.round((d.amount / maxAmt) * 100)) + '%' }, el('span', { text: d.date.slice(8) }))))) : null,
+        el('div', { class: 'card' }, ...r.by_day.map((d) => el('div', { class: 'rrow' }, el('span', { text: d.date }), el('span', { text: d.count + ' · ₹ ' + A.money(d.amount) + ' (' + t('r_cash') + ' ' + A.money(d.cash) + ' · UPI ' + A.money(d.upi) + ')' })))),
+        el('div', { class: 'sec', text: t('r_items') }), el('div', { class: 'card' }, ...r.items.map((x) => el('div', { class: 'rrow' }, el('span', { text: A.itemName(x) }), el('span', { text: '× ' + x.qty + ' · ₹ ' + A.money(x.amount) })))),
+        el('div', { class: 'sec', text: t('r_top') }), el('div', { class: 'card' }, ...r.customers.map((c) => el('div', { class: 'rrow' }, el('span', { text: c.name + (c.mobile ? ' · ' + c.mobile : '') }), el('span', { text: c.count + ' · ₹ ' + A.money(c.amount) }))))
+      ] : [el('div', { class: 'empty', text: t('r_none') })])].filter(Boolean));
+  }
+  async function load() {
+    const my = ++req, r = range();
+    $('out').replaceChildren(el('div', { class: 'loading', text: t('loading') }));
+    try { const d = await call('report', r); if (my === req) render(d); }
+    catch (err) { if (my === req) $('out').replaceChildren(el('div', { class: 'empty', text: err.message })); }
+  }
+  A.mountHeader('n_report', async () => { await load(); }); A.mountNav('report');
+  drawPicker(); load();
+})();
+</script>
+</body>
+</html>

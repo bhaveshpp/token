@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="gu">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#E65100">
+  <title>ટોકન / टोकन</title>
+  <link rel="stylesheet" href="common.css">
+  <script src="common.js"></script>
+</head>
+<body>
+  <div class="hdr"><div class="hdr-bar"><h1 class="hdr-title" id="ttl"></h1><div class="hdr-right"><button id="lang" class="lang-btn" type="button"></button></div></div></div>
+  <main class="page">
+    <section class="card" style="margin-top:1rem">
+      <div class="seg" id="seg"></div>
+      <form id="fs" novalidate>
+        <label class="lbl" id="lU" for="u"></label><input id="u" class="field" autocomplete="username" autocapitalize="none">
+        <label class="lbl" id="lP" for="p"></label><input id="p" class="field" type="password" autocomplete="current-password">
+        <button class="btn btn-primary btn-block" id="bs" type="submit"></button>
+      </form>
+      <form id="fc" novalidate hidden>
+        <label class="lbl" id="lM" for="m"></label><input id="m" class="field" type="tel" inputmode="numeric" maxlength="14" autocomplete="username">
+        <label class="lbl" id="lN" for="pn"></label><input id="pn" class="field" type="password" inputmode="numeric" maxlength="4" autocomplete="current-password">
+        <button class="btn btn-primary btn-block" id="bc" type="submit"></button>
+      </form>
+    </section>
+  </main>
+<script>
+(() => {
+  'use strict';
+  const A = App, { $, t, el, toast, setBusy } = A;
+  const s0 = A.loadSession();
+  if (s0) { location.replace(A.homeFor(s0.role)); return; }
+  A.showFlash();
+  document.title = t('app');
+  $('ttl').textContent = '🧾 ' + t('app');
+  $('lang').textContent = A.getLang() === 'hi' ? 'ગુ' : 'हि';
+  $('lang').addEventListener('click', () => A.setLang(A.getLang() === 'hi' ? 'gu' : 'hi'));
+  $('lU').textContent = t('username'); $('lP').textContent = t('password'); $('lM').textContent = t('mobile'); $('lN').textContent = t('pin');
+  $('bs').textContent = t('login'); $('bc').textContent = t('login');
+  let mode = 'staff';
+  function drawSeg() {
+    $('seg').replaceChildren(...[['staff', 'staff'], ['customer', 'customer']].map((x) => el('button', { type: 'button', class: mode === x[0] ? 'active' : '', text: t(x[1]), onclick: () => { mode = x[0]; $('fs').hidden = mode !== 'staff'; $('fc').hidden = mode !== 'customer'; drawSeg(); } })));
+  }
+  drawSeg();
+  async function go(btn, action, payload, mk) {
+    setBusy(btn, true);
+    try {
+      const d = await A.api(action, payload);
+      A.saveSession(mk(d)); A.flash(t('welcome', { name: d.user.name }));
+      location.replace(A.homeFor(d.user.role));
+    } catch (err) { toast(err.code === 'invalid_credentials' ? t('wrong_login') : err.message, 'error'); setBusy(btn, false); }
+  }
+  $('fs').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const username = $('u').value.trim(), password = $('p').value;
+    if (!username || !password) { toast(t('enter_login'), 'error'); return; }
+    go($('bs'), 'login_staff', { username, password }, (d) => ({ who: 'staff', username: d.user.username, name: d.user.name, role: d.user.role, token: d.token, exp: d.expires }));
+  });
+  $('fc').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const mobile = A.normMobile($('m').value), pin = $('pn').value.trim();
+    if (mobile.length !== 10 || !/^\d{4}$/.test(pin)) { toast(t('enter_login'), 'error'); return; }
+    go($('bc'), 'login_customer', { mobile, pin }, (d) => ({ who: 'customer', mobile: d.user.mobile, name: d.user.name, role: 'Customer', token: d.token, exp: d.expires }));
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="gu">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#E65100">
+  <title>ટોકન / टोकन</title>
+  <link rel="stylesheet" href="common.css">
+  <script src="common.js"></script>
+</head>
+<body>
+  <div id="hdr" class="hdr"></div>
+  <main class="page">
+    <div id="placed"></div>
+    <div class="card"><b id="mTitle"></b><div id="menu"></div>
+      <div class="total-bar"><span id="tLbl"></span><b id="tot">₹ 0</b></div>
+      <label class="lbl" id="sLbl"></label><div class="pick" id="svc"></div>
+      <input id="note" class="field" style="margin-top:.6rem" maxlength="200">
+      <button id="go" class="btn btn-primary btn-block" type="button"></button>
+    </div>
+    <div class="sec" id="myTitle"></div>
+    <div id="mine"></div>
+  </main>
+<script>
+(() => {
+  'use strict';
+  const A = App, { $, el, t, toast, call } = A;
+  const sess = A.requireLogin(['Customer']);
+  if (!sess) return;
+  let settings = { pending_expiry_min: 15, poll_seconds: 6, shop_whatsapp: '' }, menu = [], qty = {}, service = '', ver = null, mine = [];
+  $('mTitle').textContent = t('o_menu'); $('tLbl').textContent = t('total'); $('sLbl').textContent = t('service'); $('go').textContent = t('o_place'); $('myTitle').textContent = t('o_my');
+  $('note').placeholder = t('note_opt');
+  const total = () => menu.reduce((s, m) => s + (qty[m.id] || 0) * m.price, 0);
+
+  function drawMenu() {
+    $('menu').replaceChildren(...menu.map((m) => {
+      const off = m.status !== 'Active';
+      return el('div', { class: 'mrow' + (off ? ' off' : '') }, el('div', { class: 'mname' }, A.itemName(m), el('div', { class: 'mprice', text: '₹ ' + A.money(m.price) + (off ? ' · ' + t('o_out') : '') })),
+        off ? null : el('div', { class: 'step' }, el('button', { type: 'button', text: '−', onclick: () => { qty[m.id] = Math.max(0, (qty[m.id] || 0) - 1); drawMenu(); } }), el('b', { text: String(qty[m.id] || 0) }),
+          el('button', { type: 'button', text: '+', onclick: () => { qty[m.id] = Math.min(50, (qty[m.id] || 0) + 1); drawMenu(); } })));
+    }));
+    $('tot').textContent = '₹ ' + A.money(total());
+  }
+  const drawSvc = () => $('svc').replaceChildren(...['PARCEL', 'DINE_IN'].map((s) => el('button', { type: 'button', class: service === s ? 'on ' + (s === 'PARCEL' ? 'parcel' : 'dine') : '', text: (s === 'PARCEL' ? '🎒 ' : '🍽️ ') + t('svc_' + s), onclick: () => { service = s; drawSvc(); } })));
+
+  function waBtn(k) {
+    if (!settings.shop_whatsapp) return null;
+    return el('button', { class: 'btn btn-wa btn-sm', type: 'button', text: '💬 ' + t('o_send_shop'), onclick: () => A.openWa(settings.shop_whatsapp, A.waText(settings.wa_template_pending, settings, k)) });
+  }
+  function myCard(k) {
+    const pending = k.status === 'PENDING';
+    const left = pending ? A.minutesLeft(k.created_at, settings.pending_expiry_min) : null;
+    return el('div', { class: 'tok ' + (pending ? 'pending' : (k.service === 'PARCEL' ? 'parcel' : 'dine')) + (k.status === 'READY' ? ' ready' : '') },
+      el('div', { class: 'tok-top' }, el('div', { class: 'tok-no' }, k.token_no || k.pending_code, k.token_no ? null : el('small', { text: ' ' + t('code') })), el('div', {}, A.statusChip(k.status), ' ', A.svcChip(k.service))),
+      el('div', { class: 'tok-items', text: A.itemsLine(k.items) }),
+      el('div', { class: 'tok-foot' }, el('div', { class: 'tok-total', text: '₹ ' + A.money(k.total) }), left !== null ? el('span', { class: 'tok-sub', text: '⏳ ' + t('o_min_left', { n: left }) }) : null),
+      pending ? el('div', { class: 'hint', text: t('o_pending_msg', { code: k.pending_code }) }) : null,
+      pending ? el('div', { class: 'btns' }, waBtn(k), el('button', { class: 'btn btn-danger btn-sm', type: 'button', text: t('o_cancel'), onclick: () => cancel(k) })) : null);
+  }
+  async function cancel(k) { try { await call('customer_cancel', { token_id: k.id }); await load(true); } catch (err) { toast(err.message, 'error'); } }
+  function drawMine() { $('mine').replaceChildren(...(mine.length ? mine.map(myCard) : [el('div', { class: 'empty', text: t('o_empty') })])); }
+  async function load(force) {
+    const d = await call('my_tokens', force || ver === null ? { force: true } : { version: ver });
+    if (d.unchanged) { drawMine(); return; }            // (redraw keeps the "minutes left" fresh)
+    ver = d.version; mine = d.tokens; drawMine();
+  }
+
+  $('go').addEventListener('click', async () => {
+    const items = menu.filter((m) => qty[m.id] > 0).map((m) => ({ item_id: m.id, qty: qty[m.id] }));
+    if (!items.length) { toast(t('need_items'), 'error'); return; }
+    if (!service) { toast(t('need_service'), 'error'); return; }
+    A.setBusy($('go'), true);
+    try {
+      const d = await call('customer_create_token', { items, service, note: $('note').value.trim() });
+      toast(t('o_placed')); qty = {}; service = ''; $('note').value = ''; drawMenu(); drawSvc(); await load(true);
+    } catch (err) { toast(err.message, 'error'); } finally { A.setBusy($('go'), false); }
+  });
+
+  async function init() {
+    A.mountHeader('app', () => load(true)); A.mountNav('order');
+    $('mine').replaceChildren(el('div', { class: 'loading', text: t('loading') }));
+    try { const b = await call('bootstrap'); settings = b.settings; menu = b.menu; drawMenu(); drawSvc(); A.startPolling(() => load(false), () => settings.poll_seconds); }
+    catch (err) { $('mine').replaceChildren(el('div', { class: 'empty', text: err.message })); }
+  }
+  init();
+})();
+</script>
+</body>
+</html>

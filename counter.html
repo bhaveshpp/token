@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="gu">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#E65100">
+  <title>ટોકન / टोकन</title>
+  <link rel="stylesheet" href="common.css">
+  <script src="common.js"></script>
+</head>
+<body>
+  <div id="hdr" class="hdr"></div>
+  <main class="page">
+    <div class="seg" id="tabs"></div>
+    <div id="ro" class="hint" hidden></div>
+    <div id="list"></div>
+  </main>
+  <button id="fab" class="fab" type="button" hidden></button>
+  <nav id="nav" class="nav"></nav>
+<script>
+(() => {
+  'use strict';
+  const A = App, { $, el, t, toast, call } = A;
+  const sess = A.requireLogin(['Admin', 'Cashier', 'Viewer']);
+  if (!sess) return;
+  const canAct = sess.role === 'Admin' || sess.role === 'Cashier';
+  let settings = { poll_seconds: 6, pending_expiry_min: 15 }, menu = [], customers = [], board = [], ver = null, tab = 'pending';
+
+  const isPending = (k) => k.status === 'PENDING';
+  const isOpen = (k) => k.status === 'CONFIRMED' || k.status === 'READY';
+  const isDone = (k) => !isPending(k) && !isOpen(k);
+  const inTab = (k) => (tab === 'pending' ? isPending(k) : tab === 'open' ? isOpen(k) : isDone(k));
+
+  /* ------------------------------- list ------------------------------- */
+  function actionBtn(label, cls, fn) { return el('button', { class: 'btn btn-sm ' + cls, type: 'button', text: label, onclick: fn }); }
+  async function act(action, payload) {
+    try { await call(action, payload); await load(true); } catch (err) { toast(err.message, 'error'); }
+  }
+  function card(k) {
+    const num = k.token_no ? k.token_no : k.pending_code;
+    const btns = [];
+    if (canAct && isPending(k)) { btns.push(actionBtn('✓ ' + t('confirm'), 'btn-ok', () => openConfirm(k)), actionBtn('✕ ' + t('reject'), 'btn-danger', () => openReason(k, 'reject_token', t('reject_q')))); }
+    if (canAct && isOpen(k)) {
+      if (k.status === 'CONFIRMED') btns.push(actionBtn(t('ready_btn'), 'btn-ghost', () => act('set_ready', { token_id: k.id })));
+      btns.push(actionBtn(t('close_btn'), 'btn-ok', () => act('close_token', { token_id: k.id })));
+      if (sess.role === 'Admin') btns.push(actionBtn(t('cancel_tok'), 'btn-danger', () => openReason(k, 'cancel_token', t('cancel_q'))));
+    }
+    if (canAct && k.customer_mobile && k.token_no) btns.push(actionBtn('WhatsApp', 'btn-wa', () => A.openWa(k.customer_mobile, A.waText(settings.wa_template_token, settings, k))));
+    const left = isPending(k) ? A.minutesLeft(k.created_at, settings.pending_expiry_min) : null;
+    return el('div', { class: 'tok ' + (isPending(k) ? 'pending' : (k.service === 'PARCEL' ? 'parcel' : 'dine')) + (k.status === 'READY' ? ' ready' : '') },
+      el('div', { class: 'tok-top' }, el('div', { class: 'tok-no' }, num, k.token_no ? null : el('small', { text: ' ' + t('code') })),
+        el('div', {}, A.statusChip(k.status), ' ', A.svcChip(k.service), k.pay_mode ? ' ' : null, k.pay_mode ? A.chip('pay', t('pay_' + k.pay_mode)) : null)),
+      el('div', { class: 'tok-who', text: k.customer_name }), el('div', { class: 'tok-sub', text: [k.customer_mobile, A.timeLabel(k.confirmed_at || k.created_at), k.created_by === 'customer' ? '📱' : ''].filter(Boolean).join(' · ') }),
+      el('div', { class: 'tok-items', text: A.itemsLine(k.items) }), k.note ? el('div', { class: 'tok-sub', text: '📝 ' + k.note }) : null,
+      el('div', { class: 'tok-foot' }, el('div', { class: 'tok-total', text: '₹ ' + A.money(k.total) }), left !== null ? el('span', { class: 'tok-sub', text: '⏳ ' + t('o_min_left', { n: left }) }) : (k.upi_ref ? el('span', { class: 'tok-sub', text: 'UPI: ' + k.upi_ref }) : null)),
+      btns.length ? el('div', { class: 'btns' }, ...btns) : null);
+  }
+  function render() {
+    const n = { pending: board.filter(isPending).length, open: board.filter(isOpen).length, done: board.filter(isDone).length };
+    $('tabs').replaceChildren(...['pending', 'open', 'done'].map((k) => el('button', { type: 'button', class: tab === k ? 'active' : '', onclick: () => { tab = k; render(); } }, t('tab_' + k), el('span', { class: 'badge', text: String(n[k]) }))));
+    const list = board.filter(inTab);
+    if (tab !== 'done') list.sort((a, b) => (a.created_at < b.created_at ? -1 : 1)); else list.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+    $('list').replaceChildren(...(list.length ? [tab === 'pending' && canAct ? el('div', { class: 'hint', text: t('pending_hint') }) : null, ...list.map(card)] : [el('div', { class: 'empty', text: t('no_tokens') })]).filter(Boolean));
+  }
+
+  /* ------------------------------ board polling ------------------------------ */
+  async function load(force) {
+    const d = await call('staff_board', force || ver === null ? { force: true } : { version: ver });
+    if (d.unchanged) return;
+    ver = d.version; board = d.tokens; render();
+  }
+
+  /* --------------------------- confirm / reject / cancel --------------------------- */
+  function openConfirm(k) {
+    let pay = 'CASH';
+    const ref = el('input', { class: 'field', id: 'cRef', placeholder: t('upi_ref'), maxlength: '40', hidden: true });
+    const pick = el('div', { class: 'pick' });
+    const save = el('button', { class: 'btn btn-ok btn-block', type: 'submit', text: '✓ ' + t('confirm') });
+    const draw = () => { pick.replaceChildren(...['CASH', 'UPI'].map((m) => el('button', { type: 'button', class: pay === m ? 'on pay' : '', text: t('pay_' + m), onclick: () => { pay = m; ref.hidden = m !== 'UPI'; draw(); } }))); };
+    draw();
+    let close;
+    const form = el('form', { novalidate: true }, el('p', { class: 'tok-who', text: (k.pending_code || '') + ' · ' + k.customer_name + ' · ₹ ' + A.money(k.total) }), el('div', { class: 'tok-items', text: A.itemsLine(k.items) }),
+      el('label', { class: 'lbl', text: t('confirm_q') }), pick, ref, save);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault(); A.setBusy(save, true);
+      try { const d = await call('confirm_token', { token_id: k.id, pay_mode: pay, upi_ref: ref.value.trim() }); close(); toast(d.token.token_no); await load(true); showCreated(d.token, null); }
+      catch (err) { toast(err.message, 'error'); A.setBusy(save, false); load(true).catch(() => {}); }
+    });
+    close = A.openSheet(t('confirm'), form);
+  }
+  function openReason(k, action, question) {
+    const reason = el('input', { class: 'field', id: 'rReason', maxlength: '80', placeholder: t('reason') });
+    const save = el('button', { class: 'btn btn-danger btn-block', type: 'submit', text: t('reject') });
+    let close;
+    const form = el('form', { novalidate: true }, el('p', { class: 'tok-who', text: question }), el('div', { class: 'tok-items', text: (k.token_no || k.pending_code) + ' · ' + k.customer_name + ' · ' + A.itemsLine(k.items) }), reason, save);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault(); A.setBusy(save, true);
+      try { await call(action, { token_id: k.id, reason: reason.value.trim() }); close(); await load(true); }
+      catch (err) { toast(err.message, 'error'); A.setBusy(save, false); }
+    });
+    close = A.openSheet(action === 'cancel_token' ? t('cancel_tok') : t('reject'), form);
+  }
+
+  /* --------------------------------- new token --------------------------------- */
+  function showCreated(tk, pin) {
+    const parts = [el('div', { class: 'bigtoken', text: tk.token_no }), el('div', { class: 'tok-who', text: tk.customer_name }), el('div', { class: 'tok-items', text: A.itemsLine(tk.items) }),
+      el('div', { class: 'tok-foot' }, A.svcChip(tk.service), el('b', { text: '₹ ' + A.money(tk.total) }))];
+    let close;
+    if (pin) parts.push(el('div', { class: 'hint', text: t('new_pin_for') + ': ' + pin + ' — ' + t('pin_hint') }));
+    if (tk.customer_mobile) {
+      const msg = () => A.waText(settings.wa_template_token, settings, tk) + (pin ? '\n' + A.waText(settings.wa_template_pin, settings, tk, { pin, link: settings.app_url }) : '');
+      parts.push(el('button', { class: 'btn btn-wa btn-block', type: 'button', text: '💬 ' + t('whatsapp'), onclick: () => A.openWa(tk.customer_mobile, msg()) }));
+    } else parts.push(el('div', { class: 'hint', text: t('no_mobile') }));
+    parts.push(el('button', { class: 'btn btn-ghost btn-block', type: 'button', text: t('done'), onclick: () => close() }));
+    close = A.openSheet(t('token_ready'), el('div', {}, ...parts));
+  }
+  function openNewToken() {
+    let cust = null, adding = false, service = '', pay = 'CASH', q = '';
+    const qty = {};
+    const search = el('input', { class: 'field', id: 'tSearch', placeholder: t('search_cust'), autocomplete: 'off' });
+    const nName = el('input', { class: 'field', id: 'tName', placeholder: t('name'), maxlength: '60' });
+    const nMob = el('input', { class: 'field', id: 'tMob', type: 'tel', inputmode: 'numeric', placeholder: t('mobile'), maxlength: '14' });
+    const note = el('input', { class: 'field', id: 'tNote', maxlength: '200', placeholder: t('note_opt') });
+    const ref = el('input', { class: 'field', id: 'tRef', maxlength: '40', placeholder: t('upi_ref'), hidden: true });
+    const custBox = el('div'), menuBox = el('div'), svcBox = el('div', { class: 'pick' }), payBox = el('div', { class: 'pick' });
+    const totalEl = el('b', { text: '₹ 0' });
+    const save = el('button', { class: 'btn btn-primary btn-block', type: 'submit', text: t('make_token') });
+    const total = () => menu.reduce((s, m) => s + (qty[m.id] || 0) * m.price, 0);
+
+    function drawCust() {
+      const chosen = cust ? el('div', { class: 'tok-who', text: '✔ ' + cust.name + ' · ' + cust.mobile }) : (adding ? null : el('div', { class: 'tok-sub', text: t('guest') }));
+      const found = q ? customers.filter((c) => c.status !== 'Inactive' && (c.name.toLowerCase().indexOf(q) >= 0 || c.mobile.indexOf(q) >= 0)).slice(0, 6) : [];
+      custBox.replaceChildren(chosen, el('div', { class: 'pillrow' }, ...found.map((c) => el('button', { type: 'button', text: c.name + ' · ' + c.mobile, onclick: () => { cust = c; adding = false; q = ''; search.value = ''; drawCust(); } })),
+        el('button', { type: 'button', text: '👤 ' + t('guest'), onclick: () => { cust = null; adding = false; drawCust(); } }), el('button', { type: 'button', text: t('new_cust'), onclick: () => { adding = true; cust = null; drawCust(); } })),
+        adding ? el('div', { class: 'two' }, nName, nMob) : null);
+    }
+    function drawMenu() {
+      menuBox.replaceChildren(...menu.map((m) => {
+        const off = m.status !== 'Active';
+        return el('div', { class: 'mrow' + (off ? ' off' : '') }, el('div', { class: 'mname' }, A.itemName(m), el('div', { class: 'mprice', text: '₹ ' + A.money(m.price) + (off ? ' · ' + t('o_out') : '') })),
+          off ? null : el('div', { class: 'step' }, el('button', { type: 'button', text: '−', onclick: () => { qty[m.id] = Math.max(0, (qty[m.id] || 0) - 1); drawMenu(); } }), el('b', { text: String(qty[m.id] || 0) }),
+            el('button', { type: 'button', text: '+', onclick: () => { qty[m.id] = Math.min(50, (qty[m.id] || 0) + 1); drawMenu(); } })));
+      }));
+      totalEl.textContent = '₹ ' + A.money(total());
+    }
+    const drawSvc = () => svcBox.replaceChildren(...['PARCEL', 'DINE_IN'].map((s) => el('button', { type: 'button', class: service === s ? 'on ' + (s === 'PARCEL' ? 'parcel' : 'dine') : '', text: (s === 'PARCEL' ? '🎒 ' : '🍽️ ') + t('svc_' + s), onclick: () => { service = s; drawSvc(); } })));
+    const drawPay = () => payBox.replaceChildren(...['CASH', 'UPI'].map((m) => el('button', { type: 'button', class: pay === m ? 'on pay' : '', text: t('pay_' + m), onclick: () => { pay = m; ref.hidden = m !== 'UPI'; drawPay(); } })));
+    search.addEventListener('input', () => { q = search.value.trim().toLowerCase(); drawCust(); });
+    drawCust(); drawMenu(); drawSvc(); drawPay();
+    let close;
+    const form = el('form', { novalidate: true },
+      el('label', { class: 'lbl', text: t('cust_sel') }), search, custBox,
+      el('label', { class: 'lbl', text: t('items') }), menuBox, el('div', { class: 'total-bar' }, el('span', { text: t('total') }), totalEl),
+      el('label', { class: 'lbl', text: t('service') }), svcBox, el('label', { class: 'lbl', text: t('pay_mode') }), payBox, ref, el('label', { class: 'lbl', text: t('note') }), note, save);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const items = menu.filter((m) => qty[m.id] > 0).map((m) => ({ item_id: m.id, qty: qty[m.id] }));
+      if (!items.length) { toast(t('need_items'), 'error'); return; }
+      if (!service) { toast(t('need_service'), 'error'); return; }
+      if (adding && (!nName.value.trim() || A.normMobile(nMob.value).length !== 10)) { toast(t('need_cust'), 'error'); return; }
+      A.setBusy(save, true);
+      try {
+        let cid = cust ? cust.id : '', pin = null, c = cust;
+        if (adding) { const r = await call('save_customer', { name: nName.value.trim(), mobile: A.normMobile(nMob.value) }); c = r.customer; cid = c.id; pin = r.pin; customers.push(c); }
+        const d = await call('create_token', { customer_id: cid, items, service, pay_mode: pay, upi_ref: ref.value.trim(), note: note.value.trim() });
+        close(); await load(true); tab = 'open'; render(); showCreated(d.token, pin);
+      } catch (err) { toast(err.message, 'error'); A.setBusy(save, false); }
+    });
+    close = A.openSheet(t('new_token').replace('+ ', ''), form);
+  }
+
+  /* ----------------------------------- init ----------------------------------- */
+  async function init() {
+    A.mountHeader('n_counter', () => load(true));
+    A.mountNav('counter');
+    if (!canAct) { $('ro').hidden = false; $('ro').textContent = t('read_only'); }
+    $('list').replaceChildren(el('div', { class: 'loading', text: t('loading') }));
+    try {
+      const b = await call('bootstrap');
+      settings = b.settings; menu = b.menu;
+      if (canAct) { call('list_customers').then((r) => { customers = r.customers; }).catch(() => {}); $('fab').hidden = false; $('fab').textContent = t('new_token'); $('fab').addEventListener('click', openNewToken); }
+      A.startPolling(() => load(false), () => settings.poll_seconds);
+    } catch (err) { $('list').replaceChildren(el('div', { class: 'empty', text: err.message })); }
+  }
+  init();
+})();
+</script>
+</body>
+</html>
